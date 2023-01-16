@@ -1,33 +1,10 @@
-/*
-Library:					Accelerometer - LIS3DSH
-Written by:				Mohamed Yaqoob (MYaqoobEmbedded YouTube Channel)
-Date Written:			12/12/2018
-Last modified:		-/-
-Description:			This is an STM32 device driver library for the LIS3DSH Accelerometer, using STM HAL libraries
-References:
-			1) STMicroelectronics LIS3DSH datasheet
-				 https://www.st.com/resource/en/datasheet/lis3dsh.pdf
-			2) ST opensource LIS3DSH accelerometer dsp drivers.
-
-* Copyright (C) 2018 - M. Yaqoob
-   This is a free software under the GNU license, you can redistribute it and/or modify it under the terms
-   of the GNU General Public Licenseversion 3 as published by the Free Software Foundation.
-
-   This software library is shared with puplic for educational purposes, without WARRANTY and Author is not liable for any damages caused directly
-   or indirectly by this software, read more about this on the GNU General Public License.
-*/
-
-//Header files
 #include "MY_LIS3DSH.h"
-
 //SPI Chip Select
 #define _LIS3DHS_CS_ENBALE		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
 #define _LIS3DHS_CS_DISABLE		HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
-
 //Library variables
 //1. SPI handle
 static SPI_HandleTypeDef accSPI_Handle;
-
 //2. Sensitivity value
 static float lis3dsh_Sensitivity = LIS3DSH_SENSITIVITY_0_06G;
 //3. bias variables
@@ -38,7 +15,6 @@ static float __Z_Bias = 0.0f;
 static float __X_Scale = 1.0f;
 static float __Y_Scale = 1.0f;
 static float __Z_Scale = 1.0f;
-
 //Functions definitions
 //Private functions
 //1. Write IO
@@ -73,8 +49,6 @@ void LIS3DSH_ReadIO(uint8_t reg, uint8_t *dataR, uint8_t size)
 		dataR[i] = spiBuf[i];
 	}
 }
-
-
 //1. Accelerometer initialise function
 void LIS3DSH_Init(SPI_HandleTypeDef *accSPI, LIS3DSH_InitTypeDef *accInitDef)
 {
@@ -128,6 +102,7 @@ void LIS3DSH_Init(SPI_HandleTypeDef *accSPI, LIS3DSH_InitTypeDef *accInitDef)
 	}
 	_LIS3DHS_CS_DISABLE;
 }
+
 //2. Get Accelerometer raw data
 LIS3DSH_DataRaw LIS3DSH_GetDataRaw(void)
 {
@@ -180,7 +155,6 @@ bool LIS3DSH_PollDRDY(uint32_t msTimeout)
 	return false;
 
 }
-
 //** Calibration functions **//
 //1. Set X-Axis calibrate
 void LIS3DSH_X_calibrate(float x_min, float x_max)
@@ -200,3 +174,4 @@ void LIS3DSH_Z_calibrate(float z_min, float z_max)
 	__Z_Bias = (z_max+z_min)/2.0f;
 	__Z_Scale = (2*1000)/(z_max - z_min);
 }
+

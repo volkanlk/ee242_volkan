@@ -22,17 +22,46 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "MY_LIS3DSH.h"
 #include "usbd_cdc_if.h"
 #include "string.h"
+#include "MY_LIS3DSH.h"
 #include <stdio.h>
+/* USER CODE END Includes */
 #include <stdarg.h>
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h"
-/* USER CODE END Includes */
 
+#define DATA_SIZE 1000
+ char  recivebuffer[64];
+static int64_t sampling_freq = EI_CLASSIFIER_FREQUENCY; // in Hz.
+static int64_t time_between_samples_us = (1000000 / (sampling_freq - 1));
+
+static float features[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE];
+float cvalue[300];
+using namespace ei;
+int get_feature_data(size_t offset, size_t length, float *out_ptr) {
+    memcpy(out_ptr, features + offset, length * sizeof(float));
+    return 0;
+}
+void vprint(const char *fmt, va_list argp)
+{
+    char string[200];
+    if(0 < vsprintf(string, fmt, argp)) // build string
+    {
+        //HAL_UART_Transmit(&huart1, (uint8_t*)string, strlen(string), 0xffffff); // send message via UART
+    	CDC_Transmit_FS((uint8_t *) string, strlen(string));
+    }
+}
+
+void ei_printf(const char *format, ...) {
+    va_list myargs;
+    va_start(myargs, format);
+    vprint(format, myargs);
+    va_end(myargs);
+}
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+LIS3DSH_InitTypeDef myAccConfigDef;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -45,36 +74,12 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-CRC_HandleTypeDef hcrc;
+ CRC_HandleTypeDef hcrc;
 
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
-/* Private variables ---------------------------------------------------------*/
-void vprint(const char *fmt, va_list argp)
-{
-    char string[200];
-    if(0 < vsprintf(string, fmt, argp)) // build string
-    {
-        //HAL_UART_Transmit(&huart1, (uint8_t*)string, strlen(string), 0xffffff); // send message via UART
-    	 CDC_Transmit_FS((uint8_t*)string, strlen(string));
-    }
-}
 
-void ei_printf(const char *format, ...) {
-    va_list myargs;
-    va_start(myargs, format);
-    vprint(format, myargs);
-    va_end(myargs);
-}
-using namespace ei;
-
-static float features[EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE] = { 0.0 };
-
-int get_feature_data(size_t offset, size_t length, float *out_ptr) {
-    memcpy(out_ptr, features + offset, length * sizeof(float));
-    return 0;
-}
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -83,23 +88,11 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_CRC_Init(void);
 /* USER CODE BEGIN PFP */
-/* Private function prototypes -----------------------------------------------*/
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-LIS3DSH_DataScaled myData;
-char A[50];
-int i=0;
-uint8_t drdyFlag=0;
-char charbuff[50];
-int pressed=0;
-
-using namespace std;
-bool featuresarrayisready=false;
-int countt=0;
 
 /* USER CODE END 0 */
 
@@ -110,7 +103,7 @@ int countt=0;
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-	LIS3DSH_InitTypeDef myAccConfigDef;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -131,84 +124,61 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_SPI1_Init();
   MX_USB_DEVICE_Init();
+  MX_SPI1_Init();
   MX_CRC_Init();
   /* USER CODE BEGIN 2 */
-	myAccConfigDef.dataRate = LIS3DSH_DATARATE_800;
-	myAccConfigDef.fullScale = LIS3DSH_FULLSCALE_4;
-	myAccConfigDef.enableAxes = LIS3DSH_XYZ_ENABLE;
-	myAccConfigDef.interruptEnable = true;
-	//myAccConfigDef.antiAliasingBW = LIS3DSH_FILTER_BW_50;
-	LIS3DSH_Init(&hspi1, &myAccConfigDef);
-
-	LIS3DSH_X_calibrate(-1000.0, 980.0);
-	LIS3DSH_Y_calibrate(-1020.0, 1040.0);
-	LIS3DSH_Z_calibrate(-920.0, 1040.0);
-	signal_t signal;
-	  	signal.total_length = sizeof(features) / sizeof(features[0]);
-	  	signal.get_data = &get_feature_data;
+  myAccConfigDef.dataRate = LIS3DSH_DATARATE_25;
+  	myAccConfigDef.fullScale = LIS3DSH_FULLSCALE_4;
+  	myAccConfigDef.antiAliasingBW = LIS3DSH_FILTER_BW_50;//update rate
+  	myAccConfigDef.enableAxes = LIS3DSH_XYZ_ENABLE;
+  	myAccConfigDef.interruptEnable = false;
+  	LIS3DSH_Init(&hspi1, &myAccConfigDef);
+  	LIS3DSH_DataScaled myData;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  for (size_t ix = 0; ix < EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE; ix += EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME)
+	  {
+		  if(LIS3DSH_PollDRDY(1000) == true)
+		 	    {
+		 	  	myData = LIS3DSH_GetDataScaled();
+
+		 	    features[ix + 0] = myData.x;
+		 	    features[ix + 1] = myData.y;
+		 	    features[ix + 2] = myData.z;
+		 	    }//if
+	  }//for
+
+	  ei_impulse_result_t result = { 0 };
+	       signal_t signal;
+	       numpy::signal_from_buffer(features, EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE, &signal);
+	       // run classifier
+	            EI_IMPULSE_ERROR res = run_classifier(&signal, &result, false);
+	            ei_printf("run_classifier returned: %d\n", res);
+	            if (res != 0) return 1;
+
+	            // print predictions
+	            ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
+	                result.timing.dsp, result.timing.classification, result.timing.anomaly);
+
+	            // print the predictions
+	           for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
+	                cvalue[ix] = result.classification[ix].value;
+	          	  ei_printf("%s:\t%f\n", result.classification[ix].label, cvalue[ix]);
+	            }
+	         //  HAL_Delay(500);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  for(;featuresarrayisready==false;)
-		{
-		  	if(drdyFlag==1){
-		  		drdyFlag=0;
-		  		myData = LIS3DSH_GetDataScaled();
-		  		  	features[3*countt]=myData.x;
-		  		  	features[3*countt+1]=myData.y;
-		  		  	features[3*countt+2]=myData.z;
-		  		  	countt++;
-			//CDC_Transmit_FS((uint8_t*)features, strlen(features));
-			//HAL_Delay(5000);
-			  if(countt==EI_CLASSIFIER_RAW_SAMPLE_COUNT){
-						countt=0;
-						featuresarrayisready=true;
-					}
-			HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
 
-		  	}
-
-		}
-	  ei_impulse_result_t result = { 0 };
-	  	      EI_IMPULSE_ERROR res = run_classifier(&signal, &result, true);
-	  	      ei_printf("run_classifier returned: %d\n", res);
-
-	  	      ei_printf("Predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
-	  	          result.timing.dsp, result.timing.classification, result.timing.anomaly);
-
-	  	      // print the predictions
-	  	      ei_printf("[");
-	  	      for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
-	  	    	  ei_printf_float(result.classification[ix].value);
-	  	  #if EI_CLASSIFIER_HAS_ANOMALY == 1
-	  	          ei_printf(", ");
-	  	  #else
-	  	          if (ix != EI_CLASSIFIER_LABEL_COUNT - 1) {
-	  	              ei_printf(", ");
-	  	          }
-	  	  #endif
-	  	      }
-	  	  #if EI_CLASSIFIER_HAS_ANOMALY == 1
-	  	      ei_printf_float(result.anomaly);
-	  	  #endif
-	  	      ei_printf("]\n\n\n");
-
-
-	  //memset(features, 0.0, EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE);
-	  HAL_Delay(1500);
-	  featuresarrayisready=false;
-
-  }
+  }//while
   /* USER CODE END 3 */
-}
+}//main
 
 /**
   * @brief System Clock Configuration
@@ -227,16 +197,14 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 4;
-  RCC_OscInitStruct.PLL.PLLN = 72;
+  RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 3;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -246,12 +214,12 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -306,7 +274,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -334,83 +302,22 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(MEMS_CS_GPIO_Port, MEMS_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3|GPIO_PIN_0, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : MEMS_CS_Pin */
-  GPIO_InitStruct.Pin = MEMS_CS_Pin;
+  /*Configure GPIO pins : PE3 PE0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(MEMS_CS_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PD12 PD13 PD14 PD15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PE0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  /* Prevent unused argument(s) compilation warning */
-  UNUSED(GPIO_Pin);
-  /* NOTE: This function Should not be modified, when the callback is needed,
-           the HAL_GPIO_EXTI_Callback could be implemented in the user file
-   */
- /* if(GPIO_Pin==GPIO_PIN_0){
-  	  if(HAL_GPIO_ReadPin( GPIOA,GPIO_PIN_0)){*/
-  drdyFlag = 1;
-/*
-  if(!featuresarrayisready){
-  	myData = LIS3DSH_GetDataScaled();
-  	features[3*countt]=myData.x;
-  	features[3*countt+1]=myData.y;
-  	features[3*countt+2]=myData.z;
-	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-	countt++;
-	if(countt==EI_CLASSIFIER_RAW_SAMPLE_COUNT){
-  		countt=0;
-  		featuresarrayisready=true;
-  	}
-}*/
-  	  /*}
-  	   *
-  	  else{
-  		  if(pressed==1){
-  		  i=0;
-  		  pressed=0;
-  		CDC_Transmit_FS("\n", strlen("\n"));
-  		  }
-  	  }
-  }*/
 
-}
 /* USER CODE END 4 */
 
 /**
@@ -421,7 +328,8 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  while(1)
+  __disable_irq();
+  while (1)
   {
   }
   /* USER CODE END Error_Handler_Debug */
@@ -439,7 +347,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-    ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
